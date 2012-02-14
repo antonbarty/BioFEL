@@ -103,6 +103,11 @@ pro fel_randomimage_displayImage, filename, pState
 		loadct, 4, /silent
 		tvscl, (*pState).image
 
+		;; Widget_control
+		thisfile = (*pState).currentFileNum+1
+		numfiles = n_elements(*((*pstate).pfile))
+		str = strcompress(string('(image',thisfile,' of ',numfiles,')'))
+		widget_control, (*pState).status_label, set_value=str
 
 		;; Turn off error handler
 		catch, /cancel
@@ -116,6 +121,19 @@ pro fel_randomimage_event, ev
   	sState = *pState
 	img_size = size(sState.image,/dim)
 	
+	
+	;; Establish polite error handler to catch crashes
+	;; (only if not in debug mode)
+	if 1 then begin
+		catch, Error_status 
+		if Error_status ne 0 then begin
+			message = 'Execution error: ' + !error_state.msg
+			r = dialog_message(message,title='Error',/center,/error)
+			catch, /cancel
+			return
+		endif 
+	endif
+
 	
 	case ev.id of 
 		
@@ -164,9 +182,11 @@ pro fel_randomimage_event, ev
 		sState.menu_save : begin
 			outfile = file_basename(sState.currentFile)
 			outfile = strmid(outfile, 0, strlen(outfile)-3)+'.tif'
+			outfile = file_basename(outfile)
 			filename = dialog_pickfile(file=outfile, path=sState.savedir, filter='*.tif', /write)
 			if (filename eq '') then $
 				return
+				
 			idl_write_tiff,filename, sState.image
 			newdir = file_dirname(filename)
 			(*pState).savedir = newdir
@@ -182,6 +202,7 @@ pro fel_randomimage_event, ev
 			filename = dialog_pickfile(file=outfile, path=sState.savedir, filter='*.h5', /write)
 			if (filename eq '') then $
 				return
+
 			write_h5,filename, sState.data
 			newdir = file_dirname(filename)
 			(*pState).savedir = newdir
@@ -199,9 +220,9 @@ pro fel_randomimage_event, ev
 			filename = file[i]
 
 			;; Display it
-			fel_randomimage_displayImage, filename, pState
 			(*pState).currentFile = filename
 			(*pState).currentFileNum = i
+			fel_randomimage_displayImage, filename, pState
 		end
 
 
@@ -217,9 +238,9 @@ pro fel_randomimage_event, ev
 			filename = file[i]
 
 			;; Display it
-			fel_randomimage_displayImage, filename, pState
 			(*pState).currentFile = filename
 			(*pState).currentFileNum = i
+			fel_randomimage_displayImage, filename, pState
 		end
 
 
@@ -234,9 +255,9 @@ pro fel_randomimage_event, ev
 			filename = file[i]
 
 			;; Display it
-			fel_randomimage_displayImage, filename, pState
 			(*pState).currentFile = filename
 			(*pState).currentFileNum = i
+			fel_randomimage_displayImage, filename, pState
 		end
 
 		;;
@@ -281,11 +302,15 @@ pro fel_randomimage_event, ev
 				message,'No files found in directory: '+newdir, /info
 				return
 			endif
+			file = newfile
 			
 			if(ptr_valid((*pState).pfile)) then $
 				ptr_free, (*pState).pfile
 			(*pState).pfile = ptr_new(newfile,/no_copy)
 			(*pState).dir = newdir
+			(*pState).currentFileNum = 0
+
+			fel_randomimage_displayImage, file[0], pState
 		end
 				
 		
@@ -299,10 +324,16 @@ pro fel_randomimage_event, ev
 				message,'No files found in directory: '+sState.dir, /info
 				return
 			endif
+			file = newfile
 			
 			if(ptr_valid((*pState).pfile)) then $
 				ptr_free, (*pState).pfile
 			(*pState).pfile = ptr_new(newfile,/no_copy)
+			(*pState).currentFileNum = n_elements(file)-1
+
+
+			fel_randomimage_displayImage, file[(*pState).currentFileNum], pState
+
 		end
 		
 		;;
@@ -391,10 +422,8 @@ pro fel_randomimage_event, ev
 		
 	endcase  
 	
+	catch, /cancel
 end
-
-
-
 
 
 
@@ -402,30 +431,29 @@ end
 pro fel_randomimage, pixmap=pixmap
 
 	;;	Select data directory
-	dir = dialog_pickfile(/directory)
+	dir = dialog_pickfile(/directory, title='Select data directory')
 	file = file_search(dir,"LCLS*.h5",/fully_qualify)
 	savedir=dir
 	
-	if n_elements(file) eq 0 then begin
+	if n_elements(file) eq 0 OR file[0] eq '' then begin
 		message,'No files found in directory: '+dir, /info
 		return
 	endif
 
 
 	;; Using a pixel map?
-	if keyword_set(pixmap) then begin
-		pixmap_file = dialog_pickfile(filter='*.h5')
-		if pixmap_file eq '' then $
-			return
-		pixmap_x = read_h5(pixmap_file,field='x')
-		pixmap_y = read_h5(pixmap_file,field='y')
-		pixmap_dx = 110e-6		;; cspad
-	endif $
-	else begin
+	pixmap_file = dialog_pickfile(filter='*.h5', title='Select detector geometry file')
+	if pixmap_file eq '' then begin
 		pixmap = 0
 		pixmap_x = 0
 		pixmap_y = 0
 		pixmap_dx = 0
+	endif $
+	else begin
+		pixmap = 1
+		pixmap_x = read_h5(pixmap_file,field='x')
+		pixmap_y = read_h5(pixmap_file,field='y')
+		pixmap_dx = 110e-6		;; cspad
 	endelse
 
 	
@@ -483,6 +511,7 @@ pro fel_randomimage, pixmap=pixmap
 		button_next = widget_button(base2, value='Next')
 		button_random = widget_button(base2, value='Random')
 		button_auto = widget_button(base2, value='Auto')
+		status_label = widget_label(base2,value='No files selected', /align_left,/dynamic_resize)
 
 
 	;;
@@ -511,7 +540,7 @@ pro fel_randomimage, pixmap=pixmap
 				  currentFile : filename, $
 				  currentFileNum : 0L, $
 				  h5field : "data/data", $
-				  image_gamma : 1., $
+				  image_gamma : 0.25, $
 				  image_boost : 1., $
 				  image_max : 32000., $
 				  use_pixmap : pixmap, $
@@ -547,7 +576,8 @@ pro fel_randomimage, pixmap=pixmap
 				  button_previous : button_previous, $
 				  button_next : button_next, $
 				  button_random : button_random, $
-				  button_auto : button_auto $
+				  button_auto : button_auto, $
+				  status_label : status_label $
 				 }
 		sState.pfile = ptr_new(file)
 		pstate = ptr_new(sState)
@@ -565,6 +595,10 @@ pro fel_randomimage, pixmap=pixmap
 
     	XMANAGER, 'fel_randomimage', base, event='fel_randomimage_event', /NO_BLOCK
     	
+		thisfile = (*pState).currentFileNum+1
+		numfiles = n_elements(*((*pstate).pfile))
+		str = strcompress(string('(image',thisfile,' of ',numfiles,')'))
+		widget_control, (*pState).status_label, set_value=str
 
 
 end
